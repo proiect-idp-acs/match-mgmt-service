@@ -1,37 +1,110 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from prometheus_fastapi_instrumentator import Instrumentator
 import httpx
+import os
 
-app = FastAPI(title="Match Management Service", description="Business Logic și State Machine")
-
+app = FastAPI(title="Match Management Service", description="Business Logic si State Machine pentru Tenis")
 Instrumentator().instrument(app).expose(app)
 
-# Schema pentru actualizarea scorului
-class ScoreUpdate(BaseModel):
-    match_id: int
-    point_winner: str # ex: "player1" sau "player2"
+DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data_service:5002")
 
-@app.get("/")
-def read_root():
-    return {"message": "Match Management Service (Business Logic) este activ!"}
+class ScoreUpdateRequest(BaseModel):
+    point_winner: str  # Trebuie sa fie "player1" sau "player2"
 
-@app.post("/api/matches/score")
-async def update_score(update: ScoreUpdate):
+def calculate_next_score(score: dict, winner: str) -> tuple[dict, str, str]:
     """
-    Aici va fi implementat State Machine-ul.
-    1. Verificăm token-ul arbitrului (cerere către Auth Service)
-    2. Calculăm noul scor (15-0, 30-0 etc.) pe baza regulilor de tenis
-    3. Trimitem noul scor către Data Service pentru a fi salvat în DB
+    Logica (State Machine) pentru tenis.
+    Returneaza: (noul_scor, noul_status, castigatorul_meciului)
     """
+    p_idx = 0 if winner == "player1" else 1
+    o_idx = 1 if p_idx == 0 else 0
     
-    # Exemplu de cerere internă către Data Service (momentan comentată până unificăm rețeaua)
-    # async with httpx.AsyncClient() as client:
-    #     response = await client.get("http://tennis-data:5002/api/data/matches")
-    #     matches = response.json()
+    sets = score["sets"]
+    games = score["games"]
+    points = score["points"]
+    
+    tennis_points = ["0", "15", "30", "40", "Adv"]
+    
+    match_status = "In_Progress"
+    match_winner = None
+    
+    # --- LOGICA DE PUNCTE ---
+    current_p = points[p_idx]
+    current_o = points[o_idx]
+    
+    won_game = False
+    
+    if current_p == "40":
+        if current_o == "40":
+            points[p_idx] = "Adv"
+        elif current_o == "Adv":
+            points[o_idx] = "40" # Deuce
+        else:
+            won_game = True
+    elif current_p == "Adv":
+        won_game = True
+    else:
+        # Trecem la urmatorul punct (0->15, 15->30, 30->40)
+        idx = tennis_points.index(current_p)
+        points[p_idx] = tennis_points[idx + 1]
 
-    return {
-        "status": "success",
-        "action": f"Punct acordat pentru {update.point_winner}",
-        "message": "State Machine-ul urmează să fie integrat aici."
-    }
+    # --- LOGICA DE GAME-URI SI SET-URI ---
+    if won_game:
+        points = ["0", "0"] # Resetam punctele
+        games[p_idx] += 1
+        
+        # Verificam daca a castigat setul (6 game-uri, diferenta de 2)
+        if games[p_idx] >= 6 and (games[p_idx] - games[o_idx]) >= 2:
+            sets[p_idx] += 1
+            games = [0, 0] # Resetam game-urile pentru noul set
+            
+            # Verificam daca a castigat meciul (Primul la 2 seturi castigate)
+            if sets[p_idx] == 2:
+                match_status = "Completed"
+                match_winner = winner
+
+    return {"sets": sets, "games": games, "points": points}, match_status, match_winner
+
+
+@app.post("/api/matches/{match_id}/score")
+async def update_match_score(match_id: int, request: ScoreUpdateRequest):
+    if request.point_winner not in ["player1", "player2"]:
+        raise HTTPException(status_code=400, detail="Castigatorul trebuie sa fie 'player1' sau 'player2'")
+
+    async with httpx.AsyncClient() as client:
+        # 1. Obtinem starea actuala a meciului de la Data Service
+        try:
+            get_resp = await client.get(f"{DATA_SERVICE_URL}/api/data/matches/{match_id}")
+            if get_resp.status_code == 404:
+                raise HTTPException(status_code=404, detail="Meciul nu a fost gasit")
+            match_data = get_resp.json()
+        except httpx.RequestError:
+            raise HTTPException(status_code=503, detail="Eroare de comunicare cu Data Service")
+
+        if match_data["status"] == "Completed":
+            raise HTTPException(status_code=400, detail="Acest meci s-a terminat deja!")
+
+        # 2. Calculam noul scor folosind algoritmul
+        current_score = match_data["score"]
+        new_score, new_status, new_winner = calculate_next_score(current_score, request.point_winner)
+
+        # 3. Trimitem noul scor înapoi la Data Service pentru a fi salvat
+        update_payload = {
+            "status": new_status,
+            "score": new_score,
+            "winner": new_winner
+        }
+        
+        update_resp = await client.put(
+            f"{DATA_SERVICE_URL}/api/data/matches/{match_id}",
+            json=update_payload
+        )
+        
+        if update_resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Eroare la salvarea scorului")
+
+        return {
+            "message": f"Punct acordat pentru {request.point_winner}",
+            "match": update_resp.json()
+        }
