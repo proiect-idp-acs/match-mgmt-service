@@ -5,8 +5,17 @@ from prometheus_fastapi_instrumentator import Instrumentator
 import httpx
 import os
 import jwt
+from fastapi.middleware.cors import CORSMiddleware
+
 
 app = FastAPI(title="Match Management Service", description="Business Logic și State Machine pentru Tenis")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # În producție aici s-ar pune domeniul de frontend
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 Instrumentator().instrument(app).expose(app)
 
 DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data_service:5002")
