@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch: # Ne permite să pornim procesul și manual din interfața GitHub
+  workflow_dispatch:
 
 jobs:
   build-and-push:
@@ -26,5 +26,4 @@ jobs:
         with:
           context: .
           push: true
-          # Generează automat tag-ul ex: ananas07/tennis-auth:latest
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}:latest
