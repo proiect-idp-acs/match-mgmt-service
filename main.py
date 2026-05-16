@@ -8,10 +8,10 @@ import jwt
 from fastapi.middleware.cors import CORSMiddleware
 
 
-app = FastAPI(title="Match Management Service", description="Business Logic și State Machine pentru Tenis")
+app = FastAPI(title="Match Management Service", description="Business Logic si State Machine pentru Tenis")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # În producție aici s-ar pune domeniul de frontend
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -20,13 +20,13 @@ Instrumentator().instrument(app).expose(app)
 
 DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data_service:5002")
 
-# --- CONFIGURARE SECURITATE JWT ---
+# CONFIGURARE SECURITATE JWT
 SECRET_KEY = "super_secret_tennis_key"
 security = HTTPBearer()
 
 def verify_arbitru_role(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """
-    Dependency care extrage token-ul, îl decodează și verifică rolul.
+    Extrage token-ul, il decodeaza si verifica rolul
     """
     token = credentials.credentials
     try:
@@ -45,8 +45,8 @@ class ScoreUpdateRequest(BaseModel):
 
 def calculate_next_score(score: dict, winner: str) -> tuple[dict, str, str]:
     """
-    Logica (State Machine) pentru tenis.
-    Returneaza: (noul_scor, noul_status, castigatorul_meciului)
+    Logica pentru scorul unui meci de tenis.
+    Returneaza (noul_scor, noul_status, castigatorul_meciului)
     """
     p_idx = 0 if winner == "player1" else 1
     o_idx = 1 if p_idx == 0 else 0
@@ -60,7 +60,7 @@ def calculate_next_score(score: dict, winner: str) -> tuple[dict, str, str]:
     match_status = "In_Progress"
     match_winner = None
     
-    # --- LOGICA DE PUNCTE ---
+    # LOGICA DE PUNCTE
     current_p = points[p_idx]
     current_o = points[o_idx]
     
@@ -80,7 +80,7 @@ def calculate_next_score(score: dict, winner: str) -> tuple[dict, str, str]:
         idx = tennis_points.index(current_p)
         points[p_idx] = tennis_points[idx + 1]
 
-    # --- LOGICA DE GAME-URI SI SET-URI ---
+    # LOGICA DE GAME-URI SI SET-URI
     if won_game:
         points = ["0", "0"] # Resetam punctele
         games[p_idx] += 1
@@ -108,7 +108,7 @@ async def update_match_score(
         raise HTTPException(status_code=400, detail="Castigatorul trebuie sa fie 'player1' sau 'player2'")
 
     async with httpx.AsyncClient() as client:
-        # 1. Obtinem starea actuala a meciului de la Data Service
+        # Obtinem starea actuala a meciului de la Data Service
         try:
             get_resp = await client.get(f"{DATA_SERVICE_URL}/api/data/matches/{match_id}")
             if get_resp.status_code == 404:
@@ -118,13 +118,13 @@ async def update_match_score(
             raise HTTPException(status_code=503, detail="Eroare de comunicare cu Data Service")
 
         if match_data["status"] == "Completed":
-            raise HTTPException(status_code=400, detail="Acest meci s-a terminat deja!")
+            raise HTTPException(status_code=400, detail="Acest meci s-a terminat deja")
 
-        # 2. Calculam noul scor folosind algoritmul
+        # Calculam noul scor
         current_score = match_data["score"]
         new_score, new_status, new_winner = calculate_next_score(current_score, request.point_winner)
 
-        # 3. Trimitem noul scor înapoi la Data Service pentru a fi salvat
+        # Trimitem noul scor înapoi la Data Service
         update_payload = {
             "status": new_status,
             "score": new_score,
@@ -136,7 +136,6 @@ async def update_match_score(
             json=update_payload
         )
         
-        # Dacă Data Service ne refuză, arătăm exact motivul lui!
         if update_resp.status_code != 200:
             raise HTTPException(
                 status_code=update_resp.status_code, 
@@ -152,8 +151,8 @@ async def update_match_score(
 @app.get("/api/matches")
 async def get_tournament_schedule():
     """
-    Ruta publică pentru spectatori și jucători.
-    Returnează programul turneului și scorurile curente.
+    Ruta publica pentru spectatori si jucatori.
+    Returneaza programul turneului si scorurile curente.
     """
     async with httpx.AsyncClient() as client:
         try:
@@ -164,17 +163,17 @@ async def get_tournament_schedule():
         except httpx.RequestError:
             raise HTTPException(status_code=503, detail="Tournament Data Service este indisponibil")
 
-# Extragerea unui singur meci în timp real (Live Score)
+# Extragerea unui singur meci în timp real
 @app.get("/api/matches/{match_id}")
 async def get_live_match_score(match_id: int):
     """
-    Ruta publică pentru live scoring-ul unui meci specific.
+    Ruta publica pentru live scoring-ul unui meci specific.
     """
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(f"{DATA_SERVICE_URL}/api/data/matches/{match_id}")
             if response.status_code == 404:
-                raise HTTPException(status_code=404, detail="Meciul nu există")
+                raise HTTPException(status_code=404, detail="Meciul nu exista")
             elif response.status_code != 200:
                 raise HTTPException(status_code=500, detail="Eroare la preluarea scorului")
             return response.json()
