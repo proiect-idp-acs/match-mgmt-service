@@ -101,10 +101,47 @@ async def update_match_score(match_id: int, request: ScoreUpdateRequest):
             json=update_payload
         )
         
+        # Dacă Data Service ne refuză, arătăm exact motivul lui!
         if update_resp.status_code != 200:
-            raise HTTPException(status_code=500, detail="Eroare la salvarea scorului")
+            raise HTTPException(
+                status_code=update_resp.status_code, 
+                detail=f"Data Service a refuzat cererea: {update_resp.text}"
+            )
 
         return {
             "message": f"Punct acordat pentru {request.point_winner}",
             "match": update_resp.json()
         }
+
+# Extragerea tuturor meciurilor pentru public/spectatori
+@app.get("/api/matches")
+async def get_tournament_schedule():
+    """
+    Ruta publică pentru spectatori și jucători.
+    Returnează programul turneului și scorurile curente.
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(f"{DATA_SERVICE_URL}/api/data/matches")
+            if response.status_code != 200:
+                raise HTTPException(status_code=500, detail="Eroare la preluarea datelor")
+            return response.json()
+        except httpx.RequestError:
+            raise HTTPException(status_code=503, detail="Tournament Data Service este indisponibil")
+
+# Extragerea unui singur meci în timp real (Live Score)
+@app.get("/api/matches/{match_id}")
+async def get_live_match_score(match_id: int):
+    """
+    Ruta publică pentru live scoring-ul unui meci specific.
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(f"{DATA_SERVICE_URL}/api/data/matches/{match_id}")
+            if response.status_code == 404:
+                raise HTTPException(status_code=404, detail="Meciul nu există")
+            elif response.status_code != 200:
+                raise HTTPException(status_code=500, detail="Eroare la preluarea scorului")
+            return response.json()
+        except httpx.RequestError:
+            raise HTTPException(status_code=503, detail="Tournament Data Service este indisponibil")
