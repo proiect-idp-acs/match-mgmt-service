@@ -1,13 +1,35 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from prometheus_fastapi_instrumentator import Instrumentator
 import httpx
 import os
+import jwt
 
-app = FastAPI(title="Match Management Service", description="Business Logic si State Machine pentru Tenis")
+app = FastAPI(title="Match Management Service", description="Business Logic și State Machine pentru Tenis")
 Instrumentator().instrument(app).expose(app)
 
 DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data_service:5002")
+
+# --- CONFIGURARE SECURITATE JWT ---
+SECRET_KEY = "super_secret_tennis_key"
+security = HTTPBearer()
+
+def verify_arbitru_role(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """
+    Dependency care extrage token-ul, îl decodează și verifică rolul.
+    """
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        if payload.get("role") != "arbitru":
+            raise HTTPException(status_code=403, detail="Acces interzis! Doar arbitrii pot modifica scorul.")
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token-ul a expirat.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Token invalid.")
+    
 
 class ScoreUpdateRequest(BaseModel):
     point_winner: str  # Trebuie sa fie "player1" sau "player2"
@@ -68,7 +90,11 @@ def calculate_next_score(score: dict, winner: str) -> tuple[dict, str, str]:
 
 
 @app.post("/api/matches/{match_id}/score")
-async def update_match_score(match_id: int, request: ScoreUpdateRequest):
+async def update_match_score(
+    match_id: int,
+    request: ScoreUpdateRequest,
+    user_data: dict = Depends(verify_arbitru_role)
+    ):
     if request.point_winner not in ["player1", "player2"]:
         raise HTTPException(status_code=400, detail="Castigatorul trebuie sa fie 'player1' sau 'player2'")
 
